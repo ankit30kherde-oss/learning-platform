@@ -1,0 +1,138 @@
+// ---------------------------------------------------------------------------
+// lab_db - owned by lab-service.
+//
+// A lab session is a small, short-lived, extremely dangerous thing: it is the
+// one place where a student's keystrokes reach a real kernel. The schema is
+// built around that: every session records exactly what was provisioned, when
+// it must die, and why it ended, because that is what you need at 3am when a
+// namespace will not clean itself up.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("LAB_DATABASE_URL")
+}
+
+enum LabSessionStatus {
+  PENDING       // row created, nothing provisioned yet
+  PROVISIONING  // namespace/pod being created
+  RUNNING       // attached and usable
+  STOPPING
+  ENDED
+  FAILED
+  EXPIRED       // hit its TTL
+}
+
+enum LabDriver {
+  KUBERNETES
+  LOCAL_DOCKER
+}
+
+/// The definition an instructor attaches to a LAB lesson.
+model LabTemplate {
+  id              String   @id @default(uuid()) @db.Uuid
+  slug            String   @unique @db.VarChar(120)
+  title           String   @db.VarChar(200)
+  description     String?  @db.Text
+
+  /// Container image. Must be an image we built and scanned - never a
+  /// student-supplied one, and never anything with a shell as root.
+  image           String   @db.VarChar(300)
+  shell           String   @default("/bin/bash") @db.VarChar(80)
+  workingDir      String   @default("/home/labuser") @db.VarChar(200)
+
+  /// Hard caps. These are copied onto the pod AND enforced again by the
+  /// namespace LimitRange, so a bug here cannot become a noisy-neighbour
+  /// incident.
+  cpuRequest      String   @default("100m") @db.VarChar(20)
+  cpuLimit        String   @default("500m") @db.VarChar(20)
+  memoryRequest   String   @default("128Mi") @db.VarChar(20)
+  memoryLimit     String   @default("512Mi") @db.VarChar(20)
+  ephemeralLimit  String   @default("1Gi") @db.VarChar(20)
+  pidsLimit       Int      @default(128)
+
+  ttlSeconds      Int      @default(1800)   // hard kill
+  idleTimeoutSeconds Int   @default(600)    // no keystrokes -> reap
+
+  /// Egress policy. `false` means the NetworkPolicy denies everything except
+  /// cluster DNS, which is the default for a Linux-basics lab.
+  allowEgress     Boolean  @default(false)
+  allowedEgressCidrs String[] @default([])
+
+  /// Optional files dropped into the home directory at start (exercise data).
+  seedFiles       Json?
+
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  sessions        LabSession[]
+
+  @@map("lab_templates")
+}
+
+model LabSession {
+  id            String           @id @default(uuid()) @db.Uuid
+  userId        String           @db.Uuid
+  courseId      String?          @db.Uuid
+  lessonId      String?          @db.Uuid
+
+  templateId    String           @db.Uuid
+  template      LabTemplate      @relation(fields: [templateId], references: [id])
+
+  status        LabSessionStatus @default(PENDING)
+  driver        LabDriver
+
+  /// What was actually created, so a reaper can delete it even if this process
+  /// has since been rescheduled onto another node.
+  namespace     String?          @db.VarChar(80)
+  podName       String?          @db.VarChar(120)
+  containerId   String?          @db.VarChar(120)
+
+  /// SHA-256 of the one-time WebSocket ticket. The raw ticket is returned once
+  /// and never stored, same discipline as refresh tokens.
+  ticketHash    String?          @unique @db.VarChar(64)
+  ticketUsedAt  DateTime?
+
+  startedAt     DateTime?
+  lastActivityAt DateTime?
+  endedAt       DateTime?
+  expiresAt     DateTime
+  endReason     String?          @db.VarChar(200)
+
+  ipAddress     String?          @db.VarChar(64)
+  userAgent     String?          @db.VarChar(400)
+
+  /// Rolling count for abuse detection, not for billing.
+  bytesIn       BigInt           @default(0)
+  bytesOut      BigInt           @default(0)
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  events        LabEvent[]
+
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+  @@map("lab_sessions")
+}
+
+/// Append-only audit trail. Command text is NOT recorded by default - it would
+/// be a PII and credential magnet - only lifecycle events and counters.
+model LabEvent {
+  id        String     @id @default(uuid()) @db.Uuid
+  sessionId String     @db.Uuid
+  session   LabSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  kind      String     @db.VarChar(60)
+  detail    String?    @db.VarChar(500)
+  createdAt DateTime   @default(now())
+
+  @@index([sessionId, createdAt])
+  @@map("lab_events")
+}

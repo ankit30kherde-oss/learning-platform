@@ -1,0 +1,34 @@
+# Scheduled checks that are too slow or too noisy for a pull request.
+name: Nightly
+
+on:
+  schedule: [{ cron: '0 19 * * *' }]   # 00:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependency-audit:
+    name: Dependency audit (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '9.15.4' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      - name: Fail on high or critical advisories
+        run: pnpm audit --audit-level high
+
+  load-test:
+    name: k6 load test against staging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: grafana/setup-k6-action@v1
+      - run: k6 run tests/load/browse-and-enroll.js
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}

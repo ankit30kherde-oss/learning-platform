@@ -1,0 +1,95 @@
+// ---------------------------------------------------------------------------
+// enrollment-service database  (enrollment_db)
+// Owns: who has access to what, and how far they have got.
+//
+// Phase 1 note: lesson progress lives here too. It is already a separate Nest
+// module (src/progress) with its own tables, so splitting it into a standalone
+// progress-service later is a copy of the module plus a new datasource - no
+// data model change. Until then, keeping them together avoids a chatty
+// synchronous hop on the hottest read path (the lesson page).
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("ENROLLMENT_DATABASE_URL")
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  COMPLETED
+}
+
+enum EnrollmentSource {
+  PAYMENT
+  ADMIN
+  FREE
+}
+
+enum LessonProgressStatus {
+  STARTED
+  COMPLETED
+}
+
+model Enrollment {
+  id            String           @id @default(uuid()) @db.Uuid
+  /// user id from auth_db, course id from course_db. No cross-database FKs.
+  userId        String           @map("user_id") @db.Uuid
+  courseId      String           @map("course_id") @db.Uuid
+  status        EnrollmentStatus @default(ACTIVE)
+  source        EnrollmentSource @default(PAYMENT)
+  /// Payment id from payment_db, for support and refund reversal.
+  paymentId     String?          @map("payment_id") @db.Uuid
+  /// Null = lifetime access. Set for subscription or cohort based access.
+  expiresAt     DateTime?        @map("expires_at")
+  /// Cached from progress records so "My courses" is one query.
+  progressPercent Int            @default(0) @map("progress_percent")
+  lastAccessedAt DateTime?       @map("last_accessed_at")
+  completedAt   DateTime?        @map("completed_at")
+  certificateId String?          @map("certificate_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  revokedAt     DateTime?        @map("revoked_at")
+  revokedReason String?          @map("revoked_reason") @db.VarChar(120)
+
+  /// One active enrollment per user per course.
+  @@unique([userId, courseId])
+  @@index([userId, status])
+  @@index([courseId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  id                 String               @id @default(uuid()) @db.Uuid
+  userId             String               @map("user_id") @db.Uuid
+  courseId           String               @map("course_id") @db.Uuid
+  lessonId           String               @map("lesson_id") @db.Uuid
+  status             LessonProgressStatus @default(STARTED)
+  /// Resume point for the video player.
+  lastPositionSeconds Int                 @default(0) @map("last_position_seconds")
+  watchedSeconds     Int                  @default(0) @map("watched_seconds")
+  completedAt        DateTime?            @map("completed_at")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+
+  @@unique([userId, lessonId])
+  @@index([userId, courseId])
+  @@map("lesson_progress")
+}
+
+/// Consumed-event ledger. Every event handler writes here inside the same
+/// transaction as its side effect, so redelivery (SQS is at-least-once) is a
+/// no-op instead of a duplicate enrollment.
+model ProcessedEvent {
+  eventId     String   @id @map("event_id") @db.VarChar(64)
+  eventName   String   @map("event_name") @db.VarChar(80)
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@index([eventName, processedAt])
+  @@map("processed_events")
+}

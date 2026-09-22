@@ -1,0 +1,42 @@
+{
+  "name": "learning-platform",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "version": "latest" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [3000, 4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007, 4008, 4009, 5432, 6379, 8025, 9000, 9001],
+  "portsAttributes": {
+    "3000": { "label": "web (Next.js)", "onAutoForward": "openPreview" },
+    "4000": { "label": "api-gateway" },
+    "4001": { "label": "auth-service" },
+    "4002": { "label": "course-service" },
+    "4003": { "label": "enrollment-service" },
+    "4004": { "label": "payment-service" },
+    "4005": { "label": "media-service" },
+    "4006": { "label": "lab-service" },
+    "4007": { "label": "quiz-service" },
+    "4008": { "label": "certificate-service" },
+    "4009": { "label": "notification-service" },
+    "8025": { "label": "MailHog (read dev emails)" },
+    "9000": { "label": "MinIO API" },
+    "9001": { "label": "MinIO console" }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "node",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "Prisma.prisma",
+        "bradlc.vscode-tailwindcss",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  }
+}

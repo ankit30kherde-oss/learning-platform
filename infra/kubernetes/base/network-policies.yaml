@@ -1,0 +1,99 @@
+# ---------------------------------------------------------------------------
+# Default deny, then open only the paths that must exist.
+#
+# The shape that matters: nothing on the internet reaches a service directly.
+# Ingress -> gateway -> services. Services talk to each other only because the
+# policies below say so, so a compromised quiz-service cannot read auth_db by
+# connecting to auth-service's internal routes from an unexpected direction.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: learning-platform
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: learning-platform
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# The ingress controller may reach the gateway and the web app, nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-edge
+  namespace: learning-platform
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [api-gateway, web]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+      ports:
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 3000 }
+---
+# The gateway may reach every backend service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-services
+  namespace: learning-platform
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: api-gateway }
+        # Service-to-service internal calls (media -> course, cert -> auth).
+        - podSelector:
+            matchLabels: { app.kubernetes.io/component: service }
+---
+# Services may reach the database, the cache and the internet egress gateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-service-egress
+  namespace: learning-platform
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: service }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/component: service }
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/16      # VPC: Aurora, ElastiCache, VPC endpoints
+            except:
+              - 169.254.169.254/32 # never the instance metadata service
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/16
+      ports:
+        - { protocol: TCP, port: 443 }   # Razorpay, SES, S3 over TLS only

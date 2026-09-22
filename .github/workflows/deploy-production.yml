@@ -1,0 +1,99 @@
+# ---------------------------------------------------------------------------
+# Production release.
+#
+# Triggered by a version tag, not by a branch push: production should be a
+# deliberate act with a name you can say out loud in an incident review.
+# The `production` environment has a required reviewer, so this job pauses for
+# human approval before touching anything.
+# ---------------------------------------------------------------------------
+name: Deploy to production
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag already built and verified in staging'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  EKS_CLUSTER: lp-production
+  NAMESPACE: learning-platform
+
+jobs:
+  approve-and-deploy:
+    name: Deploy (requires approval)
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://devopsacademy.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: |
+          # Promote the exact artefact staging ran; do not rebuild it. Rebuilding
+          # would produce a different image from the same source and silently
+          # invalidate everything staging proved.
+          echo "tag=${{ github.event.inputs.image_tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
+
+      - name: Capture current revisions for rollback
+        run: |
+          mkdir -p /tmp/rollback
+          for svc in api-gateway auth-service course-service enrollment-service \
+                     payment-service media-service lab-service quiz-service \
+                     certificate-service notification-service web; do
+            kubectl -n $NAMESPACE get deployment/$svc -o jsonpath='{.spec.template.spec.containers[0].image}' \
+              > "/tmp/rollback/$svc" || true
+          done
+
+      - name: Database migrations
+        run: |
+          sed -e "s|__IMAGE_TAG__|${{ steps.tag.outputs.tag }}|g" \
+              -e "s|__REGISTRY__|${{ secrets.ECR_REGISTRY }}|g" \
+              infra/kubernetes/jobs/migrate.yaml | kubectl apply -f -
+          kubectl -n $NAMESPACE wait --for=condition=complete job/db-migrate-${{ steps.tag.outputs.tag }} --timeout=900s
+
+      - name: Deploy
+        id: deploy
+        run: |
+          kubectl apply -k infra/kubernetes/overlays/production
+          for svc in api-gateway auth-service course-service enrollment-service \
+                     payment-service media-service lab-service quiz-service \
+                     certificate-service notification-service web; do
+            kubectl -n $NAMESPACE set image deployment/$svc \
+              $svc=${{ secrets.ECR_REGISTRY }}/lp/$svc:${{ steps.tag.outputs.tag }}
+            kubectl -n $NAMESPACE rollout status deployment/$svc --timeout=600s
+          done
+
+      - name: Smoke test
+        run: |
+          BASE=${{ secrets.PRODUCTION_BASE_URL }}
+          curl -fsS "$BASE/healthz" > /dev/null
+          curl -fsS "$BASE/api/courses" > /dev/null
+
+      - name: Roll back
+        if: failure()
+        run: |
+          for svc in $(ls /tmp/rollback); do
+            image=$(cat "/tmp/rollback/$svc")
+            [ -n "$image" ] && kubectl -n $NAMESPACE set image deployment/$svc "$svc=$image" || true
+          done
+          echo "::error::Production deploy failed; previous images restored."

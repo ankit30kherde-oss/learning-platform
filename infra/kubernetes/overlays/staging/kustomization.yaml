@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: learning-platform
+
+resources:
+  - ../../base
+
+# Staging runs the same manifests as production with smaller numbers. Keeping
+# one base and two overlays is what makes "it worked in staging" mean something.
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target: { kind: HorizontalPodAutoscaler }
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+  - target: { kind: PodDisruptionBudget }
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+
+configMapGenerator:
+  - name: platform-config
+    behavior: merge
+    literals:
+      - NODE_ENV=staging
+      - APP_PUBLIC_URL=https://staging.devopsacademy.example.com

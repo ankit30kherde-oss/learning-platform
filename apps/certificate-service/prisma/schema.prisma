@@ -1,0 +1,77 @@
+// ---------------------------------------------------------------------------
+// certificate_db - owned by certificate-service.
+//
+// A certificate is a claim someone will put on LinkedIn, so it needs to be
+// verifiable by a stranger with no account. That drives the design: a public
+// serial, a public verification page, and a signature over the claim so a
+// forged HTML page cannot pass verification.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CERT_DATABASE_URL")
+}
+
+enum CertificateStatus {
+  ISSUED
+  REVOKED
+}
+
+model Certificate {
+  id            String            @id @default(uuid()) @db.Uuid
+
+  /// Human-facing, printed on the certificate, safe to share.
+  serial        String            @unique @db.VarChar(40)
+
+  userId        String            @db.Uuid
+  courseId      String            @db.Uuid
+
+  /// Denormalised on purpose. A certificate must still render correctly in
+  /// 2031 even if the course was renamed, repriced or deleted - it is a record
+  /// of what happened, not a live view of the catalog.
+  recipientName String            @db.VarChar(160)
+  recipientEmail String           @db.VarChar(255)
+  courseTitle   String            @db.VarChar(255)
+  instructorName String           @db.VarChar(160)
+  hoursTotal    Int               @default(0)
+
+  status        CertificateStatus @default(ISSUED)
+  issuedAt      DateTime          @default(now())
+  revokedAt     DateTime?
+  revokeReason  String?           @db.VarChar(300)
+
+  /// HMAC over (serial|userId|courseId|issuedAt). Verification recomputes it,
+  /// so editing a downloaded PDF does not produce a certificate that verifies.
+  signature     String            @db.VarChar(128)
+
+  /// Optional stored artefact, if a PDF was rendered and uploaded.
+  pdfStorageKey String?           @db.VarChar(512)
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  verifications CertificateVerification[]
+
+  @@unique([userId, courseId])
+  @@index([courseId, issuedAt])
+  @@map("certificates")
+}
+
+/// Every public verification hit. Useful for "is this certificate being
+/// checked by employers?" and for spotting enumeration attempts on serials.
+model CertificateVerification {
+  id            String      @id @default(uuid()) @db.Uuid
+  certificateId String      @db.Uuid
+  certificate   Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+
+  ipAddress     String?     @db.VarChar(64)
+  userAgent     String?     @db.VarChar(400)
+  checkedAt     DateTime    @default(now())
+
+  @@index([certificateId, checkedAt])
+  @@map("certificate_verifications")
+}

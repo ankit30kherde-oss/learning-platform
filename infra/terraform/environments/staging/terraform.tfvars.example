@@ -1,0 +1,5 @@
+# cp terraform.tfvars.example terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored - never commit it.
+razorpay_key_id         = "rzp_test_xxxxxxxxxxxx"
+razorpay_key_secret     = "CHANGE_ME"
+razorpay_webhook_secret = "CHANGE_ME"

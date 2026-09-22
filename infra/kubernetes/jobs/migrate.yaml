@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# Migrations as a Job, run by CI before the rollout.
+#
+# The job name carries the image tag so each deploy creates a distinct object:
+# re-running a deploy does not silently reuse a completed Job, and the history
+# shows exactly which release migrated what.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate-__IMAGE_TAG__
+  namespace: learning-platform
+spec:
+  backoffLimit: 1        # a failed migration is not something to retry blindly
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: __REGISTRY__/lp/auth-service:__IMAGE_TAG__
+          command: ['sh', '-c']
+          args:
+            - |
+              set -e
+              # Each image ships its own schema; run them in dependency order.
+              npx prisma migrate deploy --schema=prisma/schema.prisma
+          envFrom:
+            - configMapRef: { name: platform-config }
+            - secretRef: { name: platform-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }

@@ -1,0 +1,159 @@
+// ---------------------------------------------------------------------------
+// auth-service database  (auth_db)
+// Owns: identities, credentials, sessions, refresh tokens, verification and
+// reset tokens, login attempts, audit log.
+// NO other service is allowed to connect to this database.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("AUTH_DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum TokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique @db.VarChar(255) // always stored lower-cased
+  passwordHash      String     @map("password_hash")
+  fullName          String     @map("full_name") @db.VarChar(120)
+  phone             String?    @db.VarChar(20)
+  status            UserStatus @default(PENDING_VERIFICATION)
+  roles             Role[]     @default([STUDENT])
+  emailVerifiedAt   DateTime?  @map("email_verified_at")
+  lastLoginAt       DateTime?  @map("last_login_at")
+  failedLoginCount  Int        @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?  @map("locked_until")
+  passwordChangedAt DateTime?  @map("password_changed_at")
+  // Audit fields
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  deletedAt         DateTime?  @map("deleted_at") // soft delete
+  createdByIp       String?    @map("created_by_ip") @db.Inet
+
+  sessions      Session[]
+  refreshTokens RefreshToken[]
+  tokens        VerificationToken[]
+  loginAttempts LoginAttempt[]
+  auditLogs     AuditLog[]
+
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@map("users")
+}
+
+/// One row per login. A session is a "refresh token family": rotating a
+/// refresh token keeps the same session id, so revoking the session kills
+/// every descendant token at once.
+model Session {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent    String?   @map("user_agent") @db.VarChar(400)
+  ip           String?   @db.Inet
+  revokedAt    DateTime? @map("revoked_at")
+  revokedReason String?  @map("revoked_reason") @db.VarChar(80)
+  lastUsedAt   DateTime  @default(now()) @map("last_used_at")
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Refresh tokens are stored ONLY as a SHA-256 hash. If auth_db leaks,
+/// the raw tokens are not recoverable.
+model RefreshToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId   String    @map("session_id") @db.Uuid
+  session     Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(64)
+  /// Set when this token is exchanged. Re-use of a used token == theft.
+  usedAt      DateTime? @map("used_at")
+  revokedAt   DateTime? @map("revoked_at")
+  replacedById String?  @map("replaced_by_id") @db.Uuid
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model VerificationToken {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   TokenPurpose
+  tokenHash String       @unique @map("token_hash") @db.VarChar(64)
+  consumedAt DateTime?   @map("consumed_at")
+  expiresAt DateTime     @map("expires_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String   @db.VarChar(255)
+  success   Boolean
+  ip        String?  @db.Inet
+  userAgent String?  @map("user_agent") @db.VarChar(400)
+  reason    String?  @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+  @@map("login_attempts")
+}
+
+/// Append-only security audit trail. Never contains passwords or tokens.
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action        String   @db.VarChar(64)
+  resourceType  String?  @map("resource_type") @db.VarChar(64)
+  resourceId    String?  @map("resource_id") @db.VarChar(64)
+  ip            String?  @db.Inet
+  userAgent     String?  @map("user_agent") @db.VarChar(400)
+  correlationId String?  @map("correlation_id") @db.VarChar(64)
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}

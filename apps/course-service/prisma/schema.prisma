@@ -1,0 +1,218 @@
+// ---------------------------------------------------------------------------
+// course-service database  (course_db)
+// Owns: the catalog - courses, modules, lessons, resources, coupons, categories.
+// Stores ONLY the instructor's user id, never a foreign key into auth_db.
+// The content model is generic: adding "Python", "Terraform" or "AI/ML" later
+// is data entry, not a schema change.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("COURSE_DATABASE_URL")
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum LessonType {
+  VIDEO
+  TEXT
+  PDF
+  QUIZ
+  ASSIGNMENT
+  LAB
+}
+
+enum ResourceKind {
+  PDF
+  SLIDES
+  CODE
+  LINK
+  DATASET
+}
+
+enum DiscountType {
+  PERCENT
+  FLAT
+}
+
+model Category {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique @db.VarChar(80)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  courses Course[]
+
+  @@map("categories")
+}
+
+model Course {
+  id               String       @id @default(uuid()) @db.Uuid
+  slug             String       @unique @db.VarChar(140)
+  title            String       @db.VarChar(200)
+  subtitle         String?      @db.VarChar(300)
+  description      String       @db.Text
+  /// Bullet points shown on the sales page.
+  outcomes         String[]     @default([])
+  prerequisites    String[]     @default([])
+  level            CourseLevel  @default(BEGINNER)
+  language         String       @default("en") @db.VarChar(10)
+  status           CourseStatus @default(DRAFT)
+  /// Price in the smallest currency unit (paise). Integer money only - never float.
+  priceMinor       Int          @default(0) @map("price_minor")
+  /// Optional strike-through price for marketing.
+  listPriceMinor   Int?         @map("list_price_minor")
+  currency         String       @default("INR") @db.VarChar(3)
+  isFree           Boolean      @default(false) @map("is_free")
+  thumbnailKey     String?      @map("thumbnail_key") @db.VarChar(400)
+  promoVideoKey    String?      @map("promo_video_key") @db.VarChar(400)
+  durationMinutes  Int          @default(0) @map("duration_minutes")
+  /// Denormalised counters kept in sync by the service (cheap listing pages).
+  lessonCount      Int          @default(0) @map("lesson_count")
+  enrollmentCount  Int          @default(0) @map("enrollment_count")
+  ratingAvg        Decimal?     @map("rating_avg") @db.Decimal(3, 2)
+  categoryId       String?      @map("category_id") @db.Uuid
+  category         Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// user id from auth_db - deliberately NOT a foreign key (separate database).
+  instructorId     String       @map("instructor_id") @db.Uuid
+  instructorName   String       @map("instructor_name") @db.VarChar(120)
+  tags             String[]     @default([])
+  publishedAt      DateTime?    @map("published_at")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  deletedAt        DateTime?    @map("deleted_at")
+  createdBy        String?      @map("created_by") @db.Uuid
+  updatedBy        String?      @map("updated_by") @db.Uuid
+
+  modules CourseModule[]
+  coupons CouponCourse[]
+
+  @@index([status, publishedAt])
+  @@index([categoryId])
+  @@index([instructorId])
+  @@index([deletedAt])
+  @@map("courses")
+}
+
+model CourseModule {
+  id          String   @id @default(uuid()) @db.Uuid
+  courseId    String   @map("course_id") @db.Uuid
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title       String   @db.VarChar(200)
+  summary     String?  @db.VarChar(1000)
+  sortOrder   Int      @map("sort_order")
+  isPreview   Boolean  @default(false) @map("is_preview")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  lessons Lesson[]
+
+  @@unique([courseId, sortOrder])
+  @@index([courseId])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id              String       @id @default(uuid()) @db.Uuid
+  moduleId        String       @map("module_id") @db.Uuid
+  module          CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  /// Denormalised for fast "does this lesson belong to a course I own?" checks.
+  courseId        String       @map("course_id") @db.Uuid
+  title           String       @db.VarChar(200)
+  slug            String       @db.VarChar(160)
+  type            LessonType   @default(VIDEO)
+  /// Markdown notes rendered under the player.
+  contentMarkdown String?      @map("content_markdown") @db.Text
+  /// S3 object key of the video. NEVER a public URL - media-service signs it.
+  videoKey        String?      @map("video_key") @db.VarChar(400)
+  videoDuration   Int          @default(0) @map("video_duration_seconds")
+  /// Free preview lessons are playable without enrollment.
+  isPreview       Boolean      @default(false) @map("is_preview")
+  /// Lab blueprint id handed to lab-service when type = LAB.
+  labTemplateId   String?      @map("lab_template_id") @db.VarChar(80)
+  /// Quiz id owned by quiz-service when type = QUIZ.
+  quizId          String?      @map("quiz_id") @db.Uuid
+  sortOrder       Int          @map("sort_order")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  deletedAt       DateTime?    @map("deleted_at")
+
+  resources LessonResource[]
+
+  @@unique([moduleId, sortOrder])
+  @@unique([courseId, slug])
+  @@index([courseId])
+  @@index([moduleId])
+  @@map("lessons")
+}
+
+model LessonResource {
+  id          String       @id @default(uuid()) @db.Uuid
+  lessonId    String       @map("lesson_id") @db.Uuid
+  lesson      Lesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  kind        ResourceKind @default(PDF)
+  title       String       @db.VarChar(200)
+  /// Private S3 key. Downloaded through a short-lived signed URL only.
+  storageKey  String       @map("storage_key") @db.VarChar(400)
+  sizeBytes   Int?         @map("size_bytes")
+  mimeType    String?      @map("mime_type") @db.VarChar(120)
+  sortOrder   Int          @default(0) @map("sort_order")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  deletedAt   DateTime?    @map("deleted_at")
+
+  @@index([lessonId])
+  @@map("lesson_resources")
+}
+
+model Coupon {
+  id             String       @id @default(uuid()) @db.Uuid
+  code           String       @unique @db.VarChar(40)
+  description    String?      @db.VarChar(300)
+  discountType   DiscountType @map("discount_type")
+  /// PERCENT: 1-100. FLAT: amount in paise.
+  discountValue  Int          @map("discount_value")
+  maxRedemptions Int?         @map("max_redemptions")
+  redeemedCount  Int          @default(0) @map("redeemed_count")
+  perUserLimit   Int          @default(1) @map("per_user_limit")
+  startsAt       DateTime?    @map("starts_at")
+  expiresAt      DateTime?    @map("expires_at")
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  deletedAt      DateTime?    @map("deleted_at")
+
+  courses CouponCourse[]
+
+  @@index([isActive, expiresAt])
+  @@map("coupons")
+}
+
+/// Join table: a coupon with no rows here applies to every course.
+model CouponCourse {
+  couponId String @map("coupon_id") @db.Uuid
+  courseId String @map("course_id") @db.Uuid
+  coupon   Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@id([couponId, courseId])
+  @@map("coupon_courses")
+}

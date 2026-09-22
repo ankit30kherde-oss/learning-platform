@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: learning-platform
+
+resources:
+  - namespace.yaml
+  - network-policies.yaml
+  - rbac.yaml
+  - external-secrets.yaml
+  - ingress.yaml
+  - services/
+  - monitoring/servicemonitor.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: learning-platform

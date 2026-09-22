@@ -1,0 +1,142 @@
+# ---------------------------------------------------------------------------
+# Everything in containers, the way staging runs it.
+#
+# `docker compose up` (the plain file) gives you only the backing services -
+# Postgres, Redis, MailHog, MinIO - which is what you want while developing,
+# because the Node processes then run on the host with hot reload.
+#
+# This file is the other mode: every service built from its Dockerfile. Use it
+# to check that the images actually work before CI pushes them to ECR.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up --build
+# ---------------------------------------------------------------------------
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+  # Containers talk to each other by service name, not localhost.
+  environment: &service-env
+    NODE_ENV: production
+    REDIS_URL: redis://redis:6379
+    SMTP_HOST: mailhog
+    SMTP_PORT: 1025
+    S3_ENDPOINT: http://minio:9000
+    AUTH_SERVICE_URL: http://auth-service:4001
+    COURSE_SERVICE_URL: http://course-service:4002
+    ENROLLMENT_SERVICE_URL: http://enrollment-service:4003
+    PAYMENT_SERVICE_URL: http://payment-service:4004
+    MEDIA_SERVICE_URL: http://media-service:4005
+    LAB_SERVICE_URL: http://lab-service:4006
+    QUIZ_SERVICE_URL: http://quiz-service:4007
+    CERT_SERVICE_URL: http://certificate-service:4008
+    NOTIFICATION_SERVICE_URL: http://notification-service:4009
+
+services:
+  api-gateway:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/api-gateway/Dockerfile }
+    ports: ["4000:4000"]
+    environment:
+      <<: *service-env
+      GATEWAY_PORT: 4000
+
+  auth-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/auth-service/Dockerfile }
+    environment:
+      <<: *service-env
+      AUTH_PORT: 4001
+      AUTH_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/auth_db?schema=public
+
+  course-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/course-service/Dockerfile }
+    environment:
+      <<: *service-env
+      COURSE_PORT: 4002
+      COURSE_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/course_db?schema=public
+
+  enrollment-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/enrollment-service/Dockerfile }
+    environment:
+      <<: *service-env
+      ENROLLMENT_PORT: 4003
+      ENROLLMENT_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/enrollment_db?schema=public
+
+  payment-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/payment-service/Dockerfile }
+    environment:
+      <<: *service-env
+      PAYMENT_PORT: 4004
+      PAYMENT_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/payment_db?schema=public
+
+  media-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/media-service/Dockerfile }
+    environment:
+      <<: *service-env
+      MEDIA_PORT: 4005
+      MEDIA_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/media_db?schema=public
+
+  lab-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/lab-service/Dockerfile }
+    environment:
+      <<: *service-env
+      LAB_PORT: 4006
+      LAB_DRIVER: local
+      LAB_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/lab_db?schema=public
+    # The local driver shells out to docker. Mounting the socket gives this
+    # container root-equivalent control of the host daemon, which is exactly why
+    # production uses LAB_DRIVER=kubernetes and never this.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+
+  quiz-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/quiz-service/Dockerfile }
+    environment:
+      <<: *service-env
+      QUIZ_PORT: 4007
+      QUIZ_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/quiz_db?schema=public
+
+  certificate-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/certificate-service/Dockerfile }
+    environment:
+      <<: *service-env
+      CERT_PORT: 4008
+      CERT_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/certificate_db?schema=public
+
+  notification-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: apps/notification-service/Dockerfile }
+    environment:
+      <<: *service-env
+      NOTIFICATION_PORT: 4009
+      NOTIFICATION_DATABASE_URL: postgresql://lp:lp_password@postgres:5432/notification_db?schema=public
+
+  web:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: /api
+    ports: ["3000:3000"]
+    environment:
+      <<: *service-env
+      GATEWAY_INTERNAL_URL: http://api-gateway:4000
+    depends_on:
+      - api-gateway
+
+# No custom network: these services join the default network created by
+# docker-compose.yml, which is where postgres, redis, mailhog and minio live.

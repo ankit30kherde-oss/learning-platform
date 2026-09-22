@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.log
+.env
+.env.local
+!.env.example
+.DS_Store
+.turbo/
+apps/*/prisma/generated/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+infra/terraform/modules/database/generated/

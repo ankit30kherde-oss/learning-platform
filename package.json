@@ -1,0 +1,30 @@
+{
+  "name": "learning-platform",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:shared": "pnpm --filter @lp/shared build",
+    "prisma:generate": "pnpm -r --parallel --filter \"./apps/*\" exec prisma generate --schema=prisma/schema.prisma || true",
+    "db:migrate": "pnpm --filter auth-service migrate && pnpm --filter course-service migrate && pnpm --filter enrollment-service migrate && pnpm --filter payment-service migrate && pnpm --filter media-service migrate && pnpm --filter lab-service migrate && pnpm --filter quiz-service migrate && pnpm --filter certificate-service migrate && pnpm --filter notification-service migrate",
+    "db:seed": "pnpm --filter course-service seed && pnpm --filter auth-service seed && pnpm --filter quiz-service seed && pnpm --filter lab-service seed",
+    "db:reset": "docker compose down -v && docker compose up -d && sleep 8 && pnpm db:migrate && pnpm db:seed",
+    "dev": "pnpm build:shared && concurrently -k -n gateway,auth,course,enroll,pay,media,lab,quiz,cert,notify,web -c cyan,green,yellow,magenta,blue,red,gray,green,yellow,magenta,white \"pnpm --filter api-gateway dev\" \"pnpm --filter auth-service dev\" \"pnpm --filter course-service dev\" \"pnpm --filter enrollment-service dev\" \"pnpm --filter payment-service dev\" \"pnpm --filter media-service dev\" \"pnpm --filter lab-service dev\" \"pnpm --filter quiz-service dev\" \"pnpm --filter certificate-service dev\" \"pnpm --filter notification-service dev\" \"pnpm --filter web dev\"",
+    "dev:core": "pnpm build:shared && concurrently -k -n gateway,auth,course,enroll,pay,web -c cyan,green,yellow,magenta,blue,white \"pnpm --filter api-gateway dev\" \"pnpm --filter auth-service dev\" \"pnpm --filter course-service dev\" \"pnpm --filter enrollment-service dev\" \"pnpm --filter payment-service dev\" \"pnpm --filter web dev\"",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter web exec playwright test",
+    "lint": "pnpm -r --no-bail lint",
+    "typecheck": "pnpm -r --no-bail exec tsc --noEmit",
+    "health": "bash scripts/health-check.sh",
+    "setup": "pnpm install && pnpm build:shared && docker compose up -d && sleep 8 && bash scripts/bootstrap-minio.sh && pnpm db:migrate && pnpm db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "@playwright/test": "^1.49.1"
+  }
+}
