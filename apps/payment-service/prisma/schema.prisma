@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PAYMENT_DATABASE_URL")
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id                  String        @id @default(uuid()) @db.Uuid
+  userId              String        @map("user_id") @db.Uuid
+  courseId            String        @map("course_id") @db.Uuid
+  orderId             String        @unique @map("order_id")
+  razorpayPaymentId   String?       @unique @map("razorpay_payment_id")
+  razorpaySignature   String?       @map("razorpay_signature")
+  amountMinor         Int           @map("amount_minor")
+  originalAmountMinor Int           @map("original_amount_minor")
+  discountMinor       Int           @default(0) @map("discount_minor")
+  currency            String        @db.VarChar(3)
+  couponCode          String?       @map("coupon_code")
+  status              PaymentStatus @default(CREATED)
+  failureReason       String?       @map("failure_reason")
+  idempotencyKey      String?       @unique @map("idempotency_key")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+  completedAt         DateTime?     @map("completed_at")
+  refundedAt          DateTime?     @map("refunded_at")
+
+  @@index([userId])
+  @@index([courseId])
+  @@index([userId, courseId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("payments")
+}
